@@ -92,8 +92,40 @@ Set-VMHost -VirtualHardDiskPath $HostVMPath -VirtualMachinePath $HostVMPath -Ena
 Write-Host "Copying VHDX Files to Host virtualization drive"
 $guipath = "$HostVMPath\GUI.vhdx"
 $azlocalpath = "$HostVMPath\AzL-node.vhdx"
-Copy-Item -Path $LocalBoxConfig.guiVHDXPath -Destination $guipath -Force | Out-Null
-Copy-Item -Path $LocalBoxConfig.AzLocalVHDXPath -Destination $azlocalpath -Force | Out-Null
+
+# Copy with verification and retry (prevents silent failures that leave VMs without OS disks)
+$vhdxCopies = @(
+    @{ Source = $LocalBoxConfig.guiVHDXPath;      Dest = $guipath;      Name = "GUI" },
+    @{ Source = $LocalBoxConfig.AzLocalVHDXPath;   Dest = $azlocalpath;  Name = "AzLocal" }
+)
+foreach ($copy in $vhdxCopies) {
+    if (-not (Test-Path $copy.Source)) {
+        Write-Error "$($copy.Name) source VHDX not found at $($copy.Source). Aborting."
+        throw "$($copy.Name) source VHDX not found at $($copy.Source)"
+    }
+    $maxRetries = 3
+    for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+        Write-Host "  Copying $($copy.Name) VHDX (attempt $attempt/$maxRetries)..."
+        Copy-Item -Path $copy.Source -Destination $copy.Dest -Force -ErrorAction SilentlyContinue
+        if (Test-Path $copy.Dest) {
+            $srcSize = (Get-Item $copy.Source).Length
+            $dstSize = (Get-Item $copy.Dest).Length
+            if ($srcSize -eq $dstSize) {
+                Write-Host "  $($copy.Name) VHDX copied successfully ($([math]::Round($dstSize/1GB,1)) GB)"
+                break
+            }
+            Write-Warning "  $($copy.Name) VHDX size mismatch (src=$srcSize dst=$dstSize), retrying..."
+            Remove-Item $copy.Dest -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Warning "  $($copy.Name) VHDX copy failed (file not created), retrying..."
+        }
+        if ($attempt -eq $maxRetries) {
+            Write-Error "$($copy.Name) VHDX copy failed after $maxRetries attempts. Source: $($copy.Source) Dest: $($copy.Dest)"
+            throw "$($copy.Name) VHDX copy failed after $maxRetries attempts"
+        }
+        Start-Sleep -Seconds 10
+    }
+}
 
 ################################################################################
 # Create the three nested Virtual Machines
@@ -116,6 +148,18 @@ Update-AzDeploymentProgressTag -ProgressString 'Creating Azure Local node VMs (A
 
 foreach ($VM in $LocalBoxConfig.NodeHostConfig) {
     $mac = New-AzLocalNodeVM -Name $VM.Hostname -VHDXPath $azlocalpath -VMSwitch $InternalSwitch -LocalBoxConfig $LocalBoxConfig
+    # Verify the node VM and its VHDX were created before proceeding
+    $nodeVhdx = "$HostVMPath\$($VM.Hostname).vhdx"
+    if (-not (Test-Path $nodeVhdx)) {
+        Write-Error "Node VM VHDX not created at $nodeVhdx after New-AzLocalNodeVM. Aborting."
+        throw "Failed to create VHDX for $($VM.Hostname) at $nodeVhdx"
+    }
+    $nodeVm = Get-VM -Name $VM.Hostname -ErrorAction SilentlyContinue
+    if (-not $nodeVm) {
+        Write-Error "Hyper-V VM '$($VM.Hostname)' not found after New-AzLocalNodeVM. Aborting."
+        throw "Failed to create Hyper-V VM $($VM.Hostname)"
+    }
+    Write-Host "  $($VM.Hostname) VM created successfully (VHDX: $([math]::Round((Get-Item $nodeVhdx).Length/1GB,1)) GB)"
     Set-AzLocalNodeVhdx -HostName $VM.Hostname -IPAddress $VM.IP -VMMac $mac  -LocalBoxConfig $LocalBoxConfig
 }
 
