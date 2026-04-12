@@ -235,6 +235,50 @@ Set-AzLocalDeployPrereqs -LocalBoxConfig $LocalBoxConfig -localCred $localCred -
 
 Write-Host "[Build cluster - Step 10/11] Validate cluster deployment..." -ForegroundColor Green
 
+# Ensure mandatory resource providers are registered before HCI validation
+# This prevents the "ArcIntegration requirements not met" error (step 90)
+# when providers registered in Phase 1 haven't fully propagated
+Write-Host "Verifying mandatory resource provider registrations..." -ForegroundColor Yellow
+$mandatoryProviders = @(
+    "Microsoft.KubernetesConfiguration",
+    "Microsoft.ExtendedLocation",
+    "Microsoft.HybridContainerService",
+    "Microsoft.HybridCompute",
+    "Microsoft.AzureStackHCI",
+    "Microsoft.ResourceConnector",
+    "Microsoft.Kubernetes",
+    "Microsoft.EdgeMarketplace"
+)
+foreach ($rp in $mandatoryProviders) {
+    $rpState = (Get-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue).RegistrationState
+    if ($rpState -ne 'Registered') {
+        Write-Host "  Registering $rp (current: $rpState)..." -ForegroundColor Yellow
+        Register-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+# Poll until all are Registered (max 5 minutes)
+$rpDeadline = (Get-Date).AddMinutes(5)
+$allRegistered = $false
+while (-not $allRegistered -and (Get-Date) -lt $rpDeadline) {
+    $allRegistered = $true
+    foreach ($rp in $mandatoryProviders) {
+        $rpState = (Get-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue).RegistrationState
+        if ($rpState -ne 'Registered') {
+            $allRegistered = $false
+            break
+        }
+    }
+    if (-not $allRegistered) {
+        Write-Host "  Waiting for provider registration propagation..." -ForegroundColor Gray
+        Start-Sleep -Seconds 15
+    }
+}
+if ($allRegistered) {
+    Write-Host "All mandatory resource providers verified as Registered" -ForegroundColor Green
+} else {
+    Write-Warning "Some providers may not be fully registered — proceeding anyway (HCI validation will catch remaining issues)"
+}
+
 # Wait before starting validation to allow Connected Machines to register device information
 Start-Sleep -Seconds 600
 
