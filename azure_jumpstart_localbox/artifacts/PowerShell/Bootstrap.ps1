@@ -240,10 +240,6 @@ $Trigger = New-ScheduledTaskTrigger -AtLogOn
 $Action = New-ScheduledTaskAction -Execute $ScheduledTaskExecutable -Argument $LocalBoxPath\LocalBoxLogonScript.ps1
 Register-ScheduledTask -TaskName "LocalBoxLogonScript" -Trigger $Trigger -User $adminUsername -Action $Action -RunLevel "Highest" -Force
 
-# Also start the task immediately for headless/CI deployments where no interactive logon occurs
-Write-Host "Starting LocalBoxLogonScript immediately for headless deployment..."
-Start-ScheduledTask -TaskName "LocalBoxLogonScript"
-
 # Disable Edge 'First Run' Setup
 Write-Host "Configuring Microsoft Edge."
 $edgePolicyRegistryPath = 'HKLM:SOFTWARE\Policies\Microsoft\Edge'

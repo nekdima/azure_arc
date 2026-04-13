@@ -94,6 +94,7 @@ $guipath = "$HostVMPath\GUI.vhdx"
 $azlocalpath = "$HostVMPath\AzL-node.vhdx"
 
 # Copy with verification and retry (prevents silent failures that leave VMs without OS disks)
+$maxRetries = 3
 $vhdxCopies = @(
     @{ Source = $LocalBoxConfig.guiVHDXPath;      Dest = $guipath;      Name = "GUI" },
     @{ Source = $LocalBoxConfig.AzLocalVHDXPath;   Dest = $azlocalpath;  Name = "AzLocal" }
@@ -103,13 +104,22 @@ foreach ($copy in $vhdxCopies) {
         Write-Error "$($copy.Name) source VHDX not found at $($copy.Source). Aborting."
         throw "$($copy.Name) source VHDX not found at $($copy.Source)"
     }
-    $maxRetries = 3
     for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
         Write-Host "  Copying $($copy.Name) VHDX (attempt $attempt/$maxRetries)..."
-        Copy-Item -Path $copy.Source -Destination $copy.Dest -Force -ErrorAction SilentlyContinue
+        try {
+            Copy-Item -Path $copy.Source -Destination $copy.Dest -Force -ErrorAction Stop
+        } catch {
+            Write-Warning "  $($copy.Name) VHDX copy attempt $attempt failed: $($_.Exception.Message)"
+            if ($attempt -eq $maxRetries) {
+                Write-Error "$($copy.Name) VHDX copy failed after $maxRetries attempts. Source: $($copy.Source) Dest: $($copy.Dest)"
+                throw "$($copy.Name) VHDX copy failed after $maxRetries attempts"
+            }
+            Start-Sleep -Seconds 10
+            continue
+        }
         if (Test-Path $copy.Dest) {
             $srcSize = (Get-Item $copy.Source).Length
-            $dstSize = (Get-Item $copy.Dest).Length
+            $dstSize = (Get-Item $copy.Dest -ErrorAction SilentlyContinue).Length
             if ($srcSize -eq $dstSize) {
                 Write-Host "  $($copy.Name) VHDX copied successfully ($([math]::Round($dstSize/1GB,1)) GB)"
                 break
@@ -117,7 +127,7 @@ foreach ($copy in $vhdxCopies) {
             Write-Warning "  $($copy.Name) VHDX size mismatch (src=$srcSize dst=$dstSize), retrying..."
             Remove-Item $copy.Dest -Force -ErrorAction SilentlyContinue
         } else {
-            Write-Warning "  $($copy.Name) VHDX copy failed (file not created), retrying..."
+            Write-Warning "  $($copy.Name) VHDX copy did not create destination file, retrying..."
         }
         if ($attempt -eq $maxRetries) {
             Write-Error "$($copy.Name) VHDX copy failed after $maxRetries attempts. Source: $($copy.Source) Dest: $($copy.Dest)"
@@ -148,19 +158,23 @@ Update-AzDeploymentProgressTag -ProgressString 'Creating Azure Local node VMs (A
 
 foreach ($VM in $LocalBoxConfig.NodeHostConfig) {
     $mac = New-AzLocalNodeVM -Name $VM.Hostname -VHDXPath $azlocalpath -VMSwitch $InternalSwitch -LocalBoxConfig $LocalBoxConfig
-    # Verify the node VM and its VHDX were created before proceeding
-    $nodeVhdx = "$HostVMPath\$($VM.Hostname).vhdx"
-    if (-not (Test-Path $nodeVhdx)) {
-        Write-Error "Node VM VHDX not created at $nodeVhdx after New-AzLocalNodeVM. Aborting."
-        throw "Failed to create VHDX for $($VM.Hostname) at $nodeVhdx"
+    if ([string]::IsNullOrWhiteSpace($mac)) {
+        Write-Error "New-AzLocalNodeVM returned null/empty MAC for $($VM.Hostname). Aborting."
+        throw "No MAC address returned for $($VM.Hostname)"
     }
+    # Verify the node VM was created before proceeding
     $nodeVm = Get-VM -Name $VM.Hostname -ErrorAction SilentlyContinue
     if (-not $nodeVm) {
         Write-Error "Hyper-V VM '$($VM.Hostname)' not found after New-AzLocalNodeVM. Aborting."
         throw "Failed to create Hyper-V VM $($VM.Hostname)"
     }
-    Write-Host "  $($VM.Hostname) VM created successfully (VHDX: $([math]::Round((Get-Item $nodeVhdx).Length/1GB,1)) GB)"
-    Set-AzLocalNodeVhdx -HostName $VM.Hostname -IPAddress $VM.IP -VMMac $mac  -LocalBoxConfig $LocalBoxConfig
+    $vhdPath = ($nodeVm | Get-VMHardDiskDrive | Select-Object -First 1).Path
+    if (-not $vhdPath -or -not (Test-Path $vhdPath)) {
+        Write-Error "Node VM VHDX not found at $vhdPath after New-AzLocalNodeVM. Aborting."
+        throw "Failed to create VHDX for $($VM.Hostname)"
+    }
+    Write-Host "  $($VM.Hostname) VM created successfully (VHDX: $([math]::Round((Get-Item $vhdPath).Length/1GB,1)) GB)"
+    Set-AzLocalNodeVhdx -HostName $VM.Hostname -IPAddress $VM.IP -VMMac $mac -LocalBoxConfig $LocalBoxConfig
 }
 
 # Start Virtual Machines
@@ -250,9 +264,9 @@ $mandatoryProviders = @(
     "Microsoft.EdgeMarketplace"
 )
 foreach ($rp in $mandatoryProviders) {
-    $rpState = (Get-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue).RegistrationState
+    $rpState = (Get-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue).RegistrationState | Select-Object -Unique
     if ($rpState -ne 'Registered') {
-        Write-Host "  Registering $rp (current: $rpState)..." -ForegroundColor Yellow
+        Write-Host "  Registering $rp (current: $($rpState -join ', '))..." -ForegroundColor Yellow
         Register-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue | Out-Null
     }
 }
@@ -262,14 +276,14 @@ $allRegistered = $false
 while (-not $allRegistered -and (Get-Date) -lt $rpDeadline) {
     $allRegistered = $true
     foreach ($rp in $mandatoryProviders) {
-        $rpState = (Get-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue).RegistrationState
+        $rpState = (Get-AzResourceProvider -ProviderNamespace $rp -ErrorAction SilentlyContinue).RegistrationState | Select-Object -Unique
         if ($rpState -ne 'Registered') {
             $allRegistered = $false
+            Write-Host "  Waiting for $rp registration ($($rpState -join ', '))..." -ForegroundColor DarkGray
             break
         }
     }
     if (-not $allRegistered) {
-        Write-Host "  Waiting for provider registration propagation..." -ForegroundColor Gray
         Start-Sleep -Seconds 15
     }
 }
