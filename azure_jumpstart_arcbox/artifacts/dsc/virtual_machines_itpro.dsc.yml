@@ -3,13 +3,13 @@ properties:
 
   resources:
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-Win2K22
+      id: namingPrefixStage-WS2025-01
       directives:
-        description: Configure VM namingPrefixStage-Win2K22
+        description: Configure VM namingPrefixStage-WS2025-01
       settings:
-        Name: namingPrefixStage-Win2K22
+        Name: namingPrefixStage-WS2025-01
         SwitchName: 'InternalNATSwitch'
-        VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K22.vhdx
+        VhdPath: F:\Virtual Machines\namingPrefixStage-WS2025-01.vhdx
         ProcessorCount: 2
         StartupMemory: '4GB'
         RestartIfNeeded: true
@@ -19,13 +19,13 @@ properties:
         EnableGuestService: true
         SecureBoot: true
     - resource: HyperVDsc/VMHyperV
-      id: namingPrefixStage-Win2K25
+      id: namingPrefixStage-WS2025-02
       directives:
-        description: Configure VM namingPrefixStage-Win2K25
+        description: Configure VM namingPrefixStage-WS2025-02
       settings:
-        Name: namingPrefixStage-Win2K25
+        Name: namingPrefixStage-WS2025-02
         SwitchName: 'InternalNATSwitch'
-        VhdPath: F:\Virtual Machines\namingPrefixStage-Win2K25.vhdx
+        VhdPath: F:\Virtual Machines\namingPrefixStage-WS2025-02.vhdx
         ProcessorCount: 2
         StartupMemory: '4GB'
         RestartIfNeeded: true

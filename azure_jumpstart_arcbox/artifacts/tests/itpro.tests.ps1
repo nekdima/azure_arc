@@ -1,7 +1,7 @@
 
 BeforeDiscovery {
     $namingPrefix = $env:namingPrefix
-    $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02","$namingPrefix-Win2K22","$namingPrefix-Win2K25")
+    $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02","$namingPrefix-WS2025-01","$namingPrefix-WS2025-02")
     $null = Connect-AzAccount -Identity -Tenant $env:tenantId -Subscription $env:subscriptionId
 }
 

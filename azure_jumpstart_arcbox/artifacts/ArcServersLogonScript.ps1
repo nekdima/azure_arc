@@ -420,11 +420,12 @@ if ($Env:flavor -ne 'DevOps') {
     if ($Env:flavor -eq 'ITPro') {
         Write-Header 'Fetching Nested VMs'
 
-        $Win2k22vmName = "$namingPrefix-Win2K22"
-        $Win2k22vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Win2K22.vhdx"
+        # Both Windows nested VMs run Windows Server 2025 for the Hotpatch demo
+        $Win2k22vmName = "$namingPrefix-WS2025-01"
+        $Win2k22vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-WS2025-01.vhdx"
 
-        $Win2k25vmName = "$namingPrefix-Win2K25"
-        $Win2k25vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Win2K25.vhdx"
+        $Win2k25vmName = "$namingPrefix-WS2025-02"
+        $Win2k25vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-WS2025-02.vhdx"
 
         $Ubuntu01vmName = "$namingPrefix-Ubuntu-01"
         $Ubuntu01vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Ubuntu-01.vhdx"
@@ -432,7 +433,7 @@ if ($Env:flavor -ne 'DevOps') {
         $Ubuntu02vmName = "$namingPrefix-Ubuntu-02"
         $Ubuntu02vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Ubuntu-02.vhdx"
 
-        $files = 'ArcBox-Win2K22.vhdx;ArcBox-Win2K25.vhdx;ArcBox-Ubuntu-01.vhdx;ArcBox-Ubuntu-02.vhdx;'
+        $files = 'ArcBox-Win2K25.vhdx;ArcBox-Ubuntu-01.vhdx;ArcBox-Ubuntu-02.vhdx;'
 
         $DeploymentProgressString = 'Downloading and configuring nested VMs'
 
@@ -453,6 +454,12 @@ if ($Env:flavor -ne 'DevOps') {
             $Env:AZCOPY_BUFFER_GB = 4
             Write-Output 'Downloading nested VMs VHDX files. This can take some time, hold tight...'
             azcopy cp $vhdSourceFolder $Env:ArcBoxVMDir --include-pattern $files --recursive=true --check-length=false --log-level=ERROR
+
+            # Build two Windows Server 2025 disks from the single downloaded WS2025 image
+            $ws2025SourceVhd = "$Env:ArcBoxVMDir\ArcBox-Win2K25.vhdx"
+            Write-Output 'Creating two Windows Server 2025 VHDX files from the WS2025 base image...'
+            Copy-Item -Path $ws2025SourceVhd -Destination $Win2k22vmvhdPath -Force
+            Move-Item -Path $ws2025SourceVhd -Destination $Win2k25vmvhdPath -Force
         }
 
         if ($namingPrefix -ne 'ArcBox') {
@@ -485,6 +492,19 @@ if ($Env:flavor -ne 'DevOps') {
         $serversDscConfigurationFile = "$Env:ArcBoxDscDir\virtual_machines_itpro.dsc.yml"
         (Get-Content -Path $serversDscConfigurationFile) -replace 'namingPrefixStage', $namingPrefix | Set-Content -Path $serversDscConfigurationFile
         winget configure --file C:\ArcBox\DSC\virtual_machines_itpro.dsc.yml --accept-configuration-agreements --disable-interactivity
+
+        # Expose virtualization extensions to the Windows Server 2025 nested VMs so that
+        # Virtualization-based security (VBS/VSM) can run inside the guest. VBS is a
+        # prerequisite for enabling Hotpatch on Arc-enabled Windows Server 2025.
+        Write-Header 'Enabling nested virtualization (VBS) on the WS2025 VMs'
+        foreach ($winVM in @($Win2k22vmName, $Win2k25vmName)) {
+            Stop-VM -Name $winVM -Force -ErrorAction SilentlyContinue
+            while ((Get-VM -Name $winVM).State -ne 'Off') { Start-Sleep -Seconds 5 }
+            Set-VMProcessor -VMName $winVM -ExposeVirtualizationExtensions $true
+            Set-VMMemory -VMName $winVM -DynamicMemoryEnabled $false
+            Start-VM -Name $winVM
+        }
+        Start-Sleep -Seconds 30
 
     # Configure automatic start & stop action for the nested VMs
     Get-VM | Where-Object {$_.State -eq "Running"} |
@@ -604,7 +624,7 @@ if ($Env:flavor -ne 'DevOps') {
 
         Invoke-Command -VMName $Win2k22vmName -ScriptBlock {
 
-            cscript C:\Windows\system32\slmgr.vbs -ipk VDYBN-27WPP-V4HQT-9VMD4-VMK7H
+            cscript C:\Windows\system32\slmgr.vbs -ipk D764K-2NDRG-47T6Q-P8T8W-YP6DF
             cscript C:\Windows\system32\slmgr.vbs -skms kms.core.windows.net
             cscript C:\Windows\system32\slmgr.vbs -ato
             cscript C:\Windows\system32\slmgr.vbs -dlv
@@ -631,7 +651,7 @@ if ($Env:flavor -ne 'DevOps') {
         Invoke-JSSudoCommand -Session $UbuntuSessions -Command "sh /home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'
-        $VMs = @("$namingPrefix-SQL", "$namingPrefix-Win2K22", "$namingPrefix-Win2K25")
+        $VMs = @("$namingPrefix-SQL", "$namingPrefix-WS2025-01", "$namingPrefix-WS2025-02")
         $VMs | ForEach-Object -Parallel {
 
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
@@ -646,7 +666,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Header 'Enabling SSH access and triggering update assessment for Arc-enabled servers'
-        $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", "$namingPrefix-Win2K22", "$namingPrefix-Win2K25")
+        $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", "$namingPrefix-WS2025-01", "$namingPrefix-WS2025-02")
         $VMs | ForEach-Object -Parallel {
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
 
