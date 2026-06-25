@@ -421,11 +421,11 @@ if ($Env:flavor -ne 'DevOps') {
         Write-Header 'Fetching Nested VMs'
 
         # Both Windows nested VMs run Windows Server 2025 for the Hotpatch demo
-        $Win2k22vmName = "$namingPrefix-WS2025-01"
-        $Win2k22vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-WS2025-01.vhdx"
+        $Win2k22vmName = "$namingPrefix-WS25-01"
+        $Win2k22vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-WS25-01.vhdx"
 
-        $Win2k25vmName = "$namingPrefix-WS2025-02"
-        $Win2k25vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-WS2025-02.vhdx"
+        $Win2k25vmName = "$namingPrefix-WS25-02"
+        $Win2k25vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-WS25-02.vhdx"
 
         $Ubuntu01vmName = "$namingPrefix-Ubuntu-01"
         $Ubuntu01vmvhdPath = "${Env:ArcBoxVMDir}\$namingPrefix-Ubuntu-01.vhdx"
@@ -458,8 +458,9 @@ if ($Env:flavor -ne 'DevOps') {
             # Build two Windows Server 2025 disks from the single downloaded WS2025 image
             $ws2025SourceVhd = "$Env:ArcBoxVMDir\ArcBox-Win2K25.vhdx"
             Write-Output 'Creating two Windows Server 2025 VHDX files from the WS2025 base image...'
-            Copy-Item -Path $ws2025SourceVhd -Destination $Win2k22vmvhdPath -Force
-            Move-Item -Path $ws2025SourceVhd -Destination $Win2k25vmvhdPath -Force
+            if (!(Test-Path $Win2k22vmvhdPath)) { Copy-Item -Path $ws2025SourceVhd -Destination $Win2k22vmvhdPath -Force }
+            if (!(Test-Path $Win2k25vmvhdPath)) { Copy-Item -Path $ws2025SourceVhd -Destination $Win2k25vmvhdPath -Force }
+            Remove-Item -Path $ws2025SourceVhd -Force -ErrorAction SilentlyContinue
         }
 
         if ($namingPrefix -ne 'ArcBox') {
@@ -651,7 +652,7 @@ if ($Env:flavor -ne 'DevOps') {
         Invoke-JSSudoCommand -Session $UbuntuSessions -Command "sh /home/$nestedLinuxUsername/installArcAgentModifiedUbuntu.sh"
 
         Write-Header 'Installing Dependency Agent for Arc-enabled Windows servers'
-        $VMs = @("$namingPrefix-SQL", "$namingPrefix-WS2025-01", "$namingPrefix-WS2025-02")
+        $VMs = @("$namingPrefix-SQL", "$namingPrefix-WS25-01", "$namingPrefix-WS25-02")
         $VMs | ForEach-Object -Parallel {
 
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
@@ -666,7 +667,7 @@ if ($Env:flavor -ne 'DevOps') {
         }
 
         Write-Header 'Enabling SSH access and triggering update assessment for Arc-enabled servers'
-        $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", "$namingPrefix-WS2025-01", "$namingPrefix-WS2025-02")
+        $VMs = @("$namingPrefix-SQL", "$namingPrefix-Ubuntu-01", "$namingPrefix-Ubuntu-02", "$namingPrefix-WS25-01", "$namingPrefix-WS25-02")
         $VMs | ForEach-Object -Parallel {
             $null = Connect-AzAccount -Identity -Tenant $using:tenantId -Subscription $using:subscriptionId -Scope Process -WarningAction SilentlyContinue
 
