@@ -494,15 +494,22 @@ if ($Env:flavor -ne 'DevOps') {
         (Get-Content -Path $serversDscConfigurationFile) -replace 'namingPrefixStage', $namingPrefix | Set-Content -Path $serversDscConfigurationFile
         winget configure --file C:\ArcBox\DSC\virtual_machines_itpro.dsc.yml --accept-configuration-agreements --disable-interactivity
 
-        # Expose virtualization extensions to the Windows Server 2025 nested VMs so that
-        # Virtualization-based security (VBS/VSM) can run inside the guest. VBS is a
-        # prerequisite for enabling Hotpatch on Arc-enabled Windows Server 2025.
-        Write-Header 'Enabling nested virtualization (VBS) on the WS2025 VMs'
+        # Prepare the Windows Server 2025 nested VMs so Virtualization-based security
+        # (VBS/VSM) can RUN inside the guest. VBS is a hard prerequisite for enabling
+        # Hotpatch on Arc-enabled Windows Server 2025. Two host-side settings are required
+        # on each nested Gen2 VM (verified): expose virtualization extensions AND enable a
+        # virtual TPM (via a local key protector). Exposing virtualization extensions alone
+        # is NOT sufficient - without a vTPM the guest's secure kernel never launches and
+        # VirtualizationBasedSecurityStatus stays 0.
+        Write-Header 'Preparing WS2025 VMs for VBS (nested virt + vTPM)'
         foreach ($winVM in @($Win2k22vmName, $Win2k25vmName)) {
             Stop-VM -Name $winVM -Force -ErrorAction SilentlyContinue
             while ((Get-VM -Name $winVM).State -ne 'Off') { Start-Sleep -Seconds 5 }
             Set-VMProcessor -VMName $winVM -ExposeVirtualizationExtensions $true
             Set-VMMemory -VMName $winVM -DynamicMemoryEnabled $false
+            # Enable a virtual TPM using a local key protector (no HGS required)
+            Set-VMKeyProtector -VMName $winVM -NewLocalKeyProtector
+            Enable-VMTPM -VMName $winVM
             Start-VM -Name $winVM
         }
         Start-Sleep -Seconds 30
